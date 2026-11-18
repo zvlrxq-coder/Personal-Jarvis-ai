@@ -110,9 +110,8 @@ if (SpeechRecognition) {
     state.textContent = "AWAITING YOUR COMMAND";
 
     if (finalText.trim()) {
-      responseBox.textContent =
-        "Command captured successfully. AI connection pending.";
-    }
+  askJarvis(finalText.trim());
+}
   };
 
   voiceBtn.onclick = function() {
@@ -162,3 +161,53 @@ clearBtn.onclick = function() {
   responseBox.textContent =
     "Voice recognition ready. Awaiting input.";
 };
+// ==================================
+// JARVIS - AI BRAIN (GEMINI)
+// ==================================
+
+const API_KEY = "YOUR_KEY_HERE";
+const MODEL = "gemini-2.5-flash";
+
+async function askJarvis(text) {
+  responseBox.textContent = "JARVIS is thinking...";
+  state.textContent = "PROCESSING...";
+
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [{ text: "You are JARVIS, a witty, polite AI assistant. Keep answers short (1-3 sentences) because they will be spoken aloud. No markdown." }]
+          },
+          contents: [{ role: "user", parts: [{ text }] }]
+        })
+      }
+    );
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      responseBox.textContent = "AI error: " + (data.error?.message || res.status);
+      return;
+    }
+
+    const reply = data.candidates[0].content.parts[0].text;
+    responseBox.textContent = reply;
+    speak(reply);
+
+  } catch (err) {
+    responseBox.textContent = "Connection failed. Check your internet.";
+  }
+
+  state.textContent = "AWAITING YOUR COMMAND";
+}
+
+function speak(text) {
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "en-IN";
+  speechSynthesis.speak(u);
+          }
