@@ -339,4 +339,19 @@ footer {
   .core { inset: 66px; }
 }
 
+/* ============ VOICE PICKER ============ */
+
+.voice-select {
+  display: block;
+  margin: 16px auto 0;
+  padding: 12px 14px;
+  width: 100%;
+  max-width: 320px;
+  background: #2a1608;
+  color: var(--accent-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12px;
+  letter-spacing: 1px;
+}
 /* END OF FILE */
