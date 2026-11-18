@@ -300,39 +300,4 @@ button:active {
   font-size: 10px;
   border-color: #6b4a30;
   color: #c4a68c;
-  box-shadow: none;
-}
-
-.metric {
-  display: flex;
-  justify-content: space-between;
-  padding: 15px 5px;
-  border-bottom: 1px solid var(--line);
-  font-size: 11px;
-}
-
-.green {
-  color: #43e6b0;
-}
-
-footer {
-  position: relative;
-  text-align: center;
-  color: var(--muted);
-  font-size: 9px;
-  letter-spacing: 2px;
-  line-height: 2;
-  padding: 20px;
-}
-
-@media (max-width: 600px) {
-  .dashboard { padding: 12px; }
-  main { margin-top: 22px; padding: 20px 10px; }
-  header { padding: 14px 10px; }
-  .brand { font-size: 15px; }
-  .orb { width: 220px; height: 220px; }
-  .ring2 { inset: 18px; }
-  .ring3 { inset: 38px; }
-  .glow { inset: 54px; }
-  .core { inset: 66px; }
-}
+  box-shadow: no
