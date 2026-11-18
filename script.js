@@ -63,6 +63,32 @@ function getKey() {
 
 
 // ==================================
+// MEMORY (conversation history)
+// ==================================
+
+const MAX_HISTORY = 12; // last 12 messages (6 exchanges)
+let history = [];
+
+try {
+  history = JSON.parse(localStorage.getItem("jarvis_history") || "[]");
+  if (!Array.isArray(history)) history = [];
+} catch (e) {
+  history = [];
+}
+
+function saveHistory() {
+  if (history.length > MAX_HISTORY) {
+    history = history.slice(history.length - MAX_HISTORY);
+  }
+  // History must start with a user message
+  while (history.length && history[0].role !== "user") history.shift();
+  try {
+    localStorage.setItem("jarvis_history", JSON.stringify(history));
+  } catch (e) {}
+}
+
+
+// ==================================
 // MODEL LIST (fast models first)
 // ==================================
 
@@ -158,22 +184,82 @@ function raceModels(models, body, ms) {
 
 
 // ==================================
-// SPEAK
+// SPEAK (with Android unlock + voice pick)
 // ==================================
 
+let voices = [];
+
+function loadVoices() {
+  if ("speechSynthesis" in window) {
+    voices = speechSynthesis.getVoices() || [];
+  }
+}
+
+if ("speechSynthesis" in window) {
+  loadVoices();
+  speechSynthesis.onvoiceschanged = loadVoices;
+}
+
+// Call this from a tap so Chrome allows speech later
+function unlockSpeech() {
+  if (!("speechSynthesis" in window)) return;
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(" ");
+    u.volume = 0;
+    speechSynthesis.speak(u);
+  } catch (e) {}
+}
+
+function pickVoice() {
+  if (!voices.length) loadVoices();
+  return (
+    voices.find(v => v.lang === "en-IN") ||
+    voices.find(v => v.lang === "en-GB") ||
+    voices.find(v => v.lang === "en-US") ||
+    voices.find(v => v.lang && v.lang.startsWith("en")) ||
+    null
+  );
+}
+
 function speak(text) {
+  if (!("speechSynthesis" in window)) {
+    state.textContent = "VOICE OUTPUT NOT SUPPORTED";
+    setMode("idle");
+    return;
+  }
+
+  const clean = text.replace(/[*_#`]/g, "");
+
   speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = "en-IN";
+
+  const u = new SpeechSynthesisUtterance(clean);
+  const v = pickVoice();
+  if (v) {
+    u.voice = v;
+    u.lang = v.lang;
+  }
+  u.rate = 1;
+  u.pitch = 1;
+  u.volume = 1;
+
   u.onstart = function () {
     setMode("speaking");
     state.textContent = "JARVIS IS SPEAKING...";
   };
-  u.onend = u.onerror = function () {
+  u.onend = function () {
     setMode("idle");
     state.textContent = "AWAITING YOUR COMMAND";
   };
-  speechSynthesis.speak(u);
+  u.onerror = function (e) {
+    setMode("idle");
+    state.textContent = "VOICE ERROR: " + (e.error || "unknown");
+  };
+
+  // Small delay helps Android Chrome after cancel()
+  setTimeout(function () {
+    speechSynthesis.speak(u);
+  }, 100);
 }
 
 
@@ -192,28 +278,33 @@ async function askJarvis(text) {
   responseBox.textContent = "JARVIS is thinking...";
   state.textContent = "PROCESSING...";
 
+  history.push({ role: "user", parts: [{ text }] });
+  saveHistory();
+
   const body = JSON.stringify({
     systemInstruction: {
-      parts: [{ text: "You are JARVIS, a witty, polite AI assistant. Keep answers short (1-3 sentences) because they will be spoken aloud. No markdown." }]
+      parts: [{ text: "You are JARVIS, a witty, polite AI assistant. Keep answers short (1-3 sentences) because they will be spoken aloud. No markdown. Use the earlier conversation for context." }]
     },
-    contents: [{ role: "user", parts: [{ text }] }]
+    contents: history
   });
-
-  const started = Date.now();
 
   try {
     if (!modelsLoaded) await loadModels();
 
     const result = await raceModels(MODELS, body, 20000);
-    const secs = ((Date.now() - started) / 1000).toFixed(1);
 
-    // The [model · seconds] tag is for testing. Delete it later if you like.
-    responseBox.textContent = result.reply + "  [" + result.model + " · " + secs + "s]";
+    history.push({ role: "model", parts: [{ text: result.reply }] });
+    saveHistory();
+
+    responseBox.textContent = result.reply;
     speak(result.reply);
 
   } catch (err) {
-    const secs = ((Date.now() - started) / 1000).toFixed(1);
-    responseBox.textContent = "AI error after " + secs + "s: " + err.message;
+    // Remove the unanswered question so history stays valid
+    history.pop();
+    saveHistory();
+
+    responseBox.textContent = "AI error: " + err.message;
     state.textContent = "AWAITING YOUR COMMAND";
     setMode("idle");
   }
@@ -293,6 +384,8 @@ if (SpeechRecognition) {
   };
 
   voiceBtn.onclick = function () {
+    unlockSpeech(); // runs inside the tap, so Chrome allows speech later
+
     if (listening) {
       recognition.stop();
       return;
@@ -318,13 +411,15 @@ if (SpeechRecognition) {
 
 
 // ==================================
-// CLEAR CONSOLE
+// CLEAR CONSOLE (also wipes memory)
 // ==================================
 
 clearBtn.onclick = function () {
   finalText = "";
+  history = [];
+  try { localStorage.removeItem("jarvis_history"); } catch (e) {}
   speechSynthesis.cancel();
   setMode("idle");
   transcriptBox.textContent = "Your spoken words will appear here...";
-  responseBox.textContent = "Voice recognition ready. Awaiting input.";
+  responseBox.textContent = "Memory cleared. Awaiting input.";
 };
