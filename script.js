@@ -85,15 +85,43 @@ function saveHistory() {
   try {
     localStorage.setItem("jarvis_history", JSON.stringify(history));
   } catch (e) {}
+  document.title = "JARVIS AI (" + history.length + " in memory)";
 }
+
+saveHistory();
 
 
 // ==================================
-// MODEL LIST (fast models first)
+// MODEL LIST + DAILY LIMIT TRACKING
 // ==================================
 
 let MODELS = ["gemini-3.8-flash"];
 let modelsLoaded = false;
+
+// Models that hit their daily limit are skipped for 3 hours
+const COOLDOWN_MS = 3 * 60 * 60 * 1000;
+
+function getExhausted() {
+  try {
+    const all = JSON.parse(localStorage.getItem("jarvis_exhausted") || "{}");
+    const now = Date.now();
+    const fresh = {};
+    Object.keys(all).forEach(m => {
+      if (now - all[m] < COOLDOWN_MS) fresh[m] = all[m];
+    });
+    return fresh;
+  } catch (e) {
+    return {};
+  }
+}
+
+function markExhausted(model) {
+  const all = getExhausted();
+  all[model] = Date.now();
+  try {
+    localStorage.setItem("jarvis_exhausted", JSON.stringify(all));
+  } catch (e) {}
+}
 
 async function loadModels() {
   modelsLoaded = true;
@@ -122,7 +150,7 @@ async function loadModels() {
     if (found.length) {
       const lite = found.filter(n => n.includes("lite"));
       const rest = found.filter(n => !n.includes("lite"));
-      MODELS = lite.concat(rest).slice(0, 3);
+      MODELS = lite.concat(rest).slice(0, 6);
     }
   } catch (e) {
     // keep the default list
@@ -131,55 +159,72 @@ async function loadModels() {
 
 
 // ==================================
-// RACE MODELS (first good answer wins)
+// TRY MODELS ONE AT A TIME
 // ==================================
 
-function raceModels(models, body, ms) {
-  return new Promise((resolve, reject) => {
-    const controllers = [];
-    let failed = 0;
-    let lastErr = "Unknown error";
-    let done = false;
+async function tryModels(body) {
+  const exhausted = getExhausted();
+  const candidates = MODELS.filter(m => !exhausted[m]);
 
-    models.forEach(model => {
-      const c = new AbortController();
-      controllers.push(c);
-      const timer = setTimeout(() => c.abort(), ms);
+  if (!candidates.length) {
+    throw new Error("QUOTA_ALL");
+  }
 
-      const url =
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${API_KEY}`;
+  let lastErr = "Unknown error";
+  let quotaHits = 0;
 
-      fetch(url, {
+  for (const model of candidates) {
+    const url =
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${API_KEY}`;
+
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12000);
+
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body,
-        signal: c.signal
-      })
-        .then(async res => {
-          const data = await res.json();
-          clearTimeout(timer);
+        signal: controller.signal
+      });
+      clearTimeout(timer);
 
-          const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      const data = await res.json();
+      const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
-          if (res.ok && reply) {
-            if (!done) {
-              done = true;
-              controllers.forEach(x => { if (x !== c) x.abort(); });
-              resolve({ model, reply });
-            }
-            return;
-          }
+      if (res.ok && reply) {
+        return { model, reply };
+      }
 
-          throw new Error(data.error?.message || ("Error " + res.status));
-        })
-        .catch(err => {
-          clearTimeout(timer);
-          lastErr = err.name === "AbortError" ? "Timed out" : err.message;
-          failed++;
-          if (!done && failed === models.length) reject(new Error(lastErr));
-        });
-    });
-  });
+      if (res.status === 429) {
+        // Daily limit hit on this model: remember and move on
+        markExhausted(model);
+        quotaHits++;
+        lastErr = "Quota reached on " + model;
+        responseBox.textContent = "Limit reached on one model, trying another...";
+        continue;
+      }
+
+      if (res.status === 503 || res.status === 404) {
+        lastErr = data.error?.message || ("Error " + res.status);
+        responseBox.textContent = "Model busy, trying another...";
+        continue;
+      }
+
+      // Any other error (bad key etc): stop and show it
+      throw new Error(data.error?.message || ("Error " + res.status));
+
+    } catch (err) {
+      if (err.name === "AbortError") {
+        lastErr = "Timed out";
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  if (quotaHits === candidates.length) throw new Error("QUOTA_ALL");
+  throw new Error(lastErr);
 }
 
 
@@ -291,7 +336,7 @@ async function askJarvis(text) {
   try {
     if (!modelsLoaded) await loadModels();
 
-    const result = await raceModels(MODELS, body, 20000);
+    const result = await tryModels(body);
 
     history.push({ role: "model", parts: [{ text: result.reply }] });
     saveHistory();
@@ -304,7 +349,13 @@ async function askJarvis(text) {
     history.pop();
     saveHistory();
 
-    responseBox.textContent = "AI error: " + err.message;
+    if (err.message === "QUOTA_ALL") {
+      responseBox.textContent =
+        "Daily free limit reached on all available models. It resets within a day. Try again later.";
+    } else {
+      responseBox.textContent = "AI error: " + err.message;
+    }
+
     state.textContent = "AWAITING YOUR COMMAND";
     setMode("idle");
   }
@@ -418,6 +469,7 @@ clearBtn.onclick = function () {
   finalText = "";
   history = [];
   try { localStorage.removeItem("jarvis_history"); } catch (e) {}
+  saveHistory();
   speechSynthesis.cancel();
   setMode("idle");
   transcriptBox.textContent = "Your spoken words will appear here...";
