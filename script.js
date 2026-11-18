@@ -179,12 +179,15 @@ function getKey() {
   }
   return API_KEY;
 }
+
 const MODEL = "gemini-2.5-flash";
-if (!getKey()) {
-  responseBox.textContent = "API key needed. Tap the mic and try again.";
-  return;
-}
+
 async function askJarvis(text) {
+  if (!getKey()) {
+    responseBox.textContent = "API key needed. Tap the mic and try again.";
+    return;
+  }
+
   responseBox.textContent = "JARVIS is thinking...";
   state.textContent = "PROCESSING...";
 
@@ -207,6 +210,7 @@ async function askJarvis(text) {
 
     if (!res.ok) {
       responseBox.textContent = "AI error: " + (data.error?.message || res.status);
+      state.textContent = "AWAITING YOUR COMMAND";
       return;
     }
 
@@ -226,4 +230,4 @@ function speak(text) {
   const u = new SpeechSynthesisUtterance(text);
   u.lang = "en-IN";
   speechSynthesis.speak(u);
-          }
+}
