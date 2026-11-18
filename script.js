@@ -166,12 +166,24 @@ clearBtn.onclick = function() {
 // ==================================
 
 let API_KEY = localStorage.getItem("gemini_key");
-if (!API_KEY) {
-  API_KEY = prompt("Paste your Gemini API key");
-  localStorage.setItem("gemini_key", API_KEY);
+
+function getKey() {
+  if (!API_KEY || API_KEY === "null") {
+    const k = prompt("Paste your Gemini API key");
+    if (k && k.trim()) {
+      API_KEY = k.trim();
+      localStorage.setItem("gemini_key", API_KEY);
+    } else {
+      API_KEY = null;
+    }
+  }
+  return API_KEY;
 }
 const MODEL = "gemini-2.5-flash";
-
+if (!getKey()) {
+  responseBox.textContent = "API key needed. Tap the mic and try again.";
+  return;
+}
 async function askJarvis(text) {
   responseBox.textContent = "JARVIS is thinking...";
   state.textContent = "PROCESSING...";
