@@ -303,21 +303,23 @@ function pickVoice() {
 }
 
 
-// ==================================
 // SPEAK (with Android unlock)
 // ==================================
+
+let currentUtterance = null; // keeps Chrome from dropping the utterance mid-speech
 
 function unlockSpeech() {
   if (!("speechSynthesis" in window)) return;
   try {
     speechSynthesis.cancel();
+    speechSynthesis.resume();
     const u = new SpeechSynthesisUtterance(" ");
     u.volume = 0;
     speechSynthesis.speak(u);
   } catch (e) {}
 }
 
-function speak(text) {
+function speak(text, useDefault) {
   if (!("speechSynthesis" in window)) {
     state.textContent = "VOICE OUTPUT NOT SUPPORTED";
     setMode("idle");
@@ -327,13 +329,21 @@ function speak(text) {
   const clean = text.replace(/[*_#`]/g, "");
 
   speechSynthesis.cancel();
+  speechSynthesis.resume();
 
   const u = new SpeechSynthesisUtterance(clean);
-  const v = pickVoice();
-  if (v) {
-    u.voice = v;
-    u.lang = v.lang;
+  currentUtterance = u;
+
+  if (useDefault) {
+    u.lang = "en-US"; // fallback: let the tablet use its own default voice
+  } else {
+    const v = pickVoice();
+    if (v) {
+      u.voice = v;
+      u.lang = v.lang;
+    }
   }
+
   u.rate = 1;
   u.pitch = 1;
   u.volume = 1;
@@ -342,18 +352,30 @@ function speak(text) {
     setMode("speaking");
     state.textContent = "JARVIS IS SPEAKING...";
   };
+
   u.onend = function () {
     setMode("idle");
     state.textContent = "AWAITING YOUR COMMAND";
   };
+
   u.onerror = function (e) {
+    // cancel() fires an error for the old utterance; ignore it
+    if (e.error === "canceled" || e.error === "interrupted") return;
+
+    // The chosen voice failed: retry once with the default voice
+    if (!useDefault) {
+      speak(text, true);
+      return;
+    }
+
     setMode("idle");
     state.textContent = "VOICE ERROR: " + (e.error || "unknown");
   };
 
   setTimeout(function () {
     speechSynthesis.speak(u);
-  }, 100);
+    speechSynthesis.resume();
+  }, 150);
 }
 
 
