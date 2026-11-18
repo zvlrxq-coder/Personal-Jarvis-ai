@@ -63,18 +63,6 @@ function getKey() {
 
 
 // ==================================
-// FETCH WITH TIMEOUT
-// ==================================
-
-function fetchWithTimeout(url, options, ms) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms || 8000);
-  return fetch(url, Object.assign({}, options, { signal: controller.signal }))
-    .finally(() => clearTimeout(timer));
-}
-
-
-// ==================================
 // MODEL LIST (fast models first)
 // ==================================
 
@@ -84,11 +72,14 @@ let modelsLoaded = false;
 async function loadModels() {
   modelsLoaded = true;
   try {
-    const r = await fetchWithTimeout(
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6000);
+
+    const r = await fetch(
       "https://generativelanguage.googleapis.com/v1beta/models?pageSize=100&key=" + API_KEY,
-      {},
-      6000
+      { signal: controller.signal }
     );
+    clearTimeout(timer);
     const d = await r.json();
 
     const found = (d.models || [])
@@ -105,11 +96,64 @@ async function loadModels() {
     if (found.length) {
       const lite = found.filter(n => n.includes("lite"));
       const rest = found.filter(n => !n.includes("lite"));
-      MODELS = lite.concat(rest).slice(0, 6);
+      MODELS = lite.concat(rest).slice(0, 3);
     }
   } catch (e) {
     // keep the default list
   }
+}
+
+
+// ==================================
+// RACE MODELS (first good answer wins)
+// ==================================
+
+function raceModels(models, body, ms) {
+  return new Promise((resolve, reject) => {
+    const controllers = [];
+    let failed = 0;
+    let lastErr = "Unknown error";
+    let done = false;
+
+    models.forEach(model => {
+      const c = new AbortController();
+      controllers.push(c);
+      const timer = setTimeout(() => c.abort(), ms);
+
+      const url =
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${API_KEY}`;
+
+      fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        signal: c.signal
+      })
+        .then(async res => {
+          const data = await res.json();
+          clearTimeout(timer);
+
+          const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+          if (res.ok && reply) {
+            if (!done) {
+              done = true;
+              controllers.forEach(x => { if (x !== c) x.abort(); });
+              resolve({ model, reply });
+            }
+            return;
+          }
+
+          throw new Error(data.error?.message || ("Error " + res.status));
+        })
+        .catch(err => {
+          clearTimeout(timer);
+          lastErr = err.name === "AbortError" ? "Timed out" : err.message;
+          failed++;
+          if (!done && failed === models.length) reject(new Error(lastErr));
+        });
+    });
+  });
 }
 
 
@@ -155,70 +199,21 @@ async function askJarvis(text) {
     contents: [{ role: "user", parts: [{ text }] }]
   });
 
+  const started = Date.now();
+
   try {
     if (!modelsLoaded) await loadModels();
 
-    let res = null;
-    let data = null;
+    const result = await raceModels(MODELS, body, 20000);
+    const secs = ((Date.now() - started) / 1000).toFixed(1);
 
-    for (const model of MODELS) {
-      const url =
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${API_KEY}`;
-
-      try {
-        res = await fetchWithTimeout(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body
-        }, 10000);
-        data = await res.json();
-      } catch (e) {
-        // Timed out or network hiccup: try the next model
-        res = null;
-        responseBox.textContent = "Model slow, trying another...";
-        continue;
-      }
-
-      if (res.ok) break;
-
-      // Busy, rate limited, or model unavailable: try the next model
-      if (res.status === 503 || res.status === 429 || res.status === 404) {
-        responseBox.textContent = "Model busy, trying another...";
-        continue;
-      }
-
-      // Any other error (bad key etc): stop and show it
-      break;
-    }
-
-    if (!res) {
-      responseBox.textContent = "Connection failed or too slow. Try again.";
-      state.textContent = "AWAITING YOUR COMMAND";
-      setMode("idle");
-      return;
-    }
-
-    if (!res.ok) {
-      responseBox.textContent = "AI error: " + (data.error?.message || res.status);
-      state.textContent = "AWAITING YOUR COMMAND";
-      setMode("idle");
-      return;
-    }
-
-    const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!reply) {
-      responseBox.textContent = "No answer came back. Try asking again.";
-      state.textContent = "AWAITING YOUR COMMAND";
-      setMode("idle");
-      return;
-    }
-
-    responseBox.textContent = reply;
-    speak(reply);
+    // The [model · seconds] tag is for testing. Delete it later if you like.
+    responseBox.textContent = result.reply + "  [" + result.model + " · " + secs + "s]";
+    speak(result.reply);
 
   } catch (err) {
-    responseBox.textContent = "Something went wrong. Try again.";
+    const secs = ((Date.now() - started) / 1000).toFixed(1);
+    responseBox.textContent = "AI error after " + secs + "s: " + err.message;
     state.textContent = "AWAITING YOUR COMMAND";
     setMode("idle");
   }
