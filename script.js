@@ -88,22 +88,32 @@ async function askJarvis(text) {
   responseBox.textContent = "JARVIS is thinking...";
   state.textContent = "PROCESSING...";
 
+  const body = JSON.stringify({
+    systemInstruction: {
+      parts: [{ text: "You are JARVIS, a witty, polite AI assistant. Keep answers short (1-3 sentences) because they will be spoken aloud. No markdown." }]
+    },
+    contents: [{ role: "user", parts: [{ text }] }]
+  });
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${API_KEY}`;
+
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${API_KEY}`,
-      {
+    let res, data;
+
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [{ text: "You are JARVIS, a witty, polite AI assistant. Keep answers short (1-3 sentences) because they will be spoken aloud. No markdown." }]
-          },
-          contents: [{ role: "user", parts: [{ text }] }]
-        })
-      }
-    );
+        body
+      });
+      data = await res.json();
 
-    const data = await res.json();
+      // Retry only when Google is busy (503) or rate limiting (429)
+      if (res.status !== 503 && res.status !== 429) break;
+
+      responseBox.textContent = "Servers busy, retrying (" + attempt + "/4)...";
+      await new Promise(r => setTimeout(r, attempt * 2000));
+    }
 
     if (!res.ok) {
       responseBox.textContent = "AI error: " + (data.error?.message || res.status);
