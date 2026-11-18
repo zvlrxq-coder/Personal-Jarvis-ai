@@ -645,11 +645,58 @@ const SETTINGS_LIST = [
   { re: /\bsettings\b/, action: "SETTINGS", name: "settings" }
 ];
 
+const APP_PACKAGES = {
+  "youtube.com": "com.google.android.youtube",
+  "m.youtube.com": "com.google.android.youtube",
+  "instagram.com": "com.instagram.android",
+  "facebook.com": "com.facebook.katana",
+  "x.com": "com.twitter.android",
+  "open.spotify.com": "com.spotify.music",
+  "netflix.com": "com.netflix.mediaclient",
+  "amazon.in": "in.amazon.mShop.android.shopping",
+  "flipkart.com": "com.flipkart.android",
+  "mail.google.com": "com.google.android.gm",
+  "maps.google.com": "com.google.android.apps.maps",
+  "wa.me": "com.whatsapp",
+  "calendar.google.com": "com.google.android.calendar",
+  "drive.google.com": "com.google.android.apps.docs",
+  "photos.google.com": "com.google.android.apps.photos",
+  "meet.google.com": "com.google.android.apps.tachyon",
+  "classroom.google.com": "com.google.android.apps.classroom",
+  "translate.google.com": "com.google.android.apps.translate",
+  "play.google.com": "com.android.vending"
+};
+
+function toAppIntent(url) {
+  let u;
+  try { u = new URL(url); } catch (e) { return null; }
+
+  const host = u.hostname.replace(/^www\./, "");
+  let pkg = APP_PACKAGES[host];
+  if (host === "google.com" && u.pathname.indexOf("/maps") === 0) {
+    pkg = "com.google.android.apps.maps";
+  }
+  if (!pkg) return null;
+
+  return "intent://" + u.host + u.pathname + u.search +
+    "#Intent;scheme=https;package=" + pkg +
+    ";S.browser_fallback_url=" + encodeURIComponent(url) + ";end";
+}
+
 function openLink(url, label) {
+  const appUrl = toAppIntent(url);
+
+  if (appUrl) {
+    try { window.location.href = appUrl; } catch (e) {}
+    return {
+      say: "Opening " + label + ", sir.",
+      link: { url: appUrl, label: label } // tap link in case Chrome blocks the automatic open
+    };
+  }
+
   let w = null;
   try { w = window.open(url, "_blank"); } catch (e) {}
   if (w) return { say: "Opening " + label + ", sir." };
-  // Chrome blocked the pop-up: give a tap link instead
   return { say: "Tap the link to open " + label + ".", link: { url: url, label: label } };
 }
 
