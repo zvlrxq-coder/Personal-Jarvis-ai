@@ -722,39 +722,244 @@ function searchCommand(t) {
   }
 
   // Places nearby
-  m = t.match(/^(?:find|show|search)\s+(.+?)\s+(?:near me|nearb
+  m = t.match(/^(?:find|show|search)\s+(.+?)\s+(?:near me|nearby|around me)$/);
+  if (m) {
+    const q = m[1].trim();
+    return openLink(
+      "https://www.google.com/maps/search/" + encodeURIComponent(q + " near me"),
+      q + " near you"
+    );
+  }
+
+  // Google search
+  m = t.match(/^(?:search google for|search for|search|google|look up)\s+(.+)$/);
+  if (m) {
+    const q = m[1].trim();
+    return openLink(
+      "https://www.google.com/search?q=" + encodeURIComponent(q),
+      "Google results for " + q
+    );
+  }
+
+  return null;
+}
+
+
+// ==================================
+// TIME / DATE / BATTERY / SUMS / HELP
+// ==================================
+
+async function batteryAnswer() {
+  if (!navigator.getBattery) return "I can't read the battery on this browser, sir.";
+  try {
+    const b = await navigator.getBattery();
+    return "Battery is at " + Math.round(b.level * 100) + " percent" +
+      (b.charging ? " and charging." : ".");
+  } catch (e) {
+    return "I couldn't read the battery, sir.";
+  }
+}
+
+function calcAnswer(n) {
+  const m = n.match(
+    /^(?:what(?:'s|s| is)\s+|calculate\s+|compute\s+|how much is\s+)?(-?\d+(?:\.\d+)?)\s*(plus|minus|times|multiplied by|divided by|into|over|x|×|\+|-|\*|\/)\s*(-?\d+(?:\.\d+)?)$/
+  );
+  if (!m) return null;
+
+  const a = parseFloat(m[1]);
+  const b = parseFloat(m[3]);
+  const op = m[2];
+  let r;
+
+  if (op === "plus" || op === "+") r = a + b;
+  else if (op === "minus" || op === "-") r = a - b;
+  else if (["times", "multiplied by", "into", "x", "×", "*"].indexOf(op) !== -1) r = a * b;
+  else {
+    if (b === 0) return "I can't divide by zero, sir.";
+    r = a / b;
+  }
+
+  r = Math.round(r * 1e6) / 1e6;
+  return "The answer is " + r + ".";
+}
+
+
+// ==================================
+// WEATHER (Open-Meteo, no key needed)
+// ==================================
+
+const WEATHER_CODES = {
+  0: "clear sky", 1: "mostly clear", 2: "partly cloudy", 3: "overcast",
+  45: "foggy", 48: "foggy", 51: "light drizzle", 53: "drizzle", 55: "heavy drizzle",
+  61: "light rain", 63: "rain", 65: "heavy rain", 71: "light snow", 73: "snow",
+  75: "heavy snow", 80: "rain showers", 81: "rain showers", 82: "heavy rain showers",
+  95: "a thunderstorm", 96: "a thunderstorm with hail", 99: "a thunderstorm with hail"
+};
+
+function getPosition() {
+  return new Promise(function (resolve, reject) {
+    if (!navigator.geolocation) return reject(new Error("no geolocation"));
+    navigator.geolocation.getCurrentPosition(
+      function (p) { resolve({ lat: p.coords.latitude, lon: p.coords.longitude, name: "your area" }); },
+      function (e) { reject(e); },
+      { timeout: 10000, maximumAge: 600000 }
+    );
+  });
+}
+
+async function geocode(city) {
+  const r = await fetch(
+    "https://geocoding-api.open-meteo.com/v1/search?count=1&name=" + encodeURIComponent(city)
+  );
+  const d = await r.json();
+  if (!d.results || !d.results.length) throw new Error("city not found");
+  const c = d.results[0];
+  return { lat: c.latitude, lon: c.longitude, name: c.name };
+}
+
+async function weatherAnswer(t) {
+  // Save a default city: "my city is Pune"
+  const home = t.match(/\b(?:my city is|i live in|set my city to)\s+([a-z][a-z .'-]*)/);
+  if (home) {
+    try {
+      const place = await geocode(home[1].trim());
+      localStorage.setItem("jarvis_home", JSON.stringify(place));
+      return "Understood, sir. I've set your city to " + place.name + ".";
+    } catch (e) {
+      return "I couldn't find that city. Try the full name.";
     }
   }
 
-  u.rate = 1;
-  u.pitch = 1;
-  u.volume = 1;
+  if (!/\b(weather|temperature|forecast)\b|\b(will it|is it) (rain|raining)\b/.test(t)) {
+    return null;
+  }
 
-  u.onstart = function () {
-    setMode("speaking");
-    state.textContent = "JARVIS IS SPEAKING...";
-  };
+  responseBox.textContent = "Checking the weather...";
 
-  u.onend = function () {
-    finishTurn();
-  };
+  try {
+    let place = null;
 
-  u.onerror = function (e) {
-    if (e.error === "canceled" || e.error === "interrupted") return;
+    const m = t.match(
+      /\b(?:in|at|for)\s+([a-z][a-z .'-]*?)\s*(?:today|tomorrow|tonight|right now|now|please)?[?.!]*$/
+    );
 
-    if (!useDefault) {
-      speak(text, true);
-      return;
+    if (m) {
+      place = await geocode(m[1].trim());
+    } else {
+      try { place = JSON.parse(localStorage.getItem("jarvis_home") || "null"); } catch (e) {}
+      if (!place) {
+        try {
+          place = await getPosition();
+          localStorage.setItem("jarvis_home", JSON.stringify(place));
+        } catch (e) {
+          return "I couldn't get your location. Say, for example, weather in Mumbai.";
+        }
+      }
     }
 
-    finishTurn();
-    state.textContent = "VOICE ERROR: " + (e.error || "unknown");
-  };
+    const url =
+      "https://api.open-meteo.com/v1/forecast?latitude=" + place.lat +
+      "&longitude=" + place.lon +
+      "&current=temperature_2m,apparent_temperature,weather_code" +
+      "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
+      "&timezone=auto&forecast_days=2";
 
-  setTimeout(function () {
-    speechSynthesis.speak(u);
-    speechSynthesis.resume();
-  }, 150);
+    const r = await fetch(url);
+    const d = await r.json();
+
+    const tomorrow = /\btomorrow\b/.test(t);
+    const i = tomorrow ? 1 : 0;
+    const desc = WEATHER_CODES[d.daily.weather_code[i]] || "mixed conditions";
+    const hi = Math.round(d.daily.temperature_2m_max[i]);
+    const lo = Math.round(d.daily.temperature_2m_min[i]);
+    const rain = d.daily.precipitation_probability_max[i];
+
+    if (tomorrow) {
+      return "Tomorrow in " + place.name + ": " + desc + ", between " + lo +
+        " and " + hi + " degrees, with a " + rain + " percent chance of rain.";
+    }
+
+    const now = Math.round(d.current.temperature_2m);
+    const feels = Math.round(d.current.apparent_temperature);
+    const nowDesc = WEATHER_CODES[d.current.weather_code] || desc;
+
+    return "It's " + now + " degrees in " + place.name + " with " + nowDesc +
+      ", feeling like " + feels + ". Today's high is " + hi + " with a " +
+      rain + " percent chance of rain.";
+
+  } catch (e) {
+    return "I couldn't reach the weather service right now.";
+  }
+}
+
+
+// ==================================
+// COMMAND ROUTER (runs before the AI)
+// ==================================
+
+async function handleCommand(raw) {
+  const t = raw.toLowerCase().replace(/[?.!,]+$/g, "").trim();
+  const n = normalizeNumbers(t);
+  const now = new Date();
+
+  // Stop talking
+  if (/^(stop|be quiet|quiet|silence|enough|shut up)$/.test(t)) {
+    speechSynthesis.cancel();
+    finishTurn();
+    return { silent: true };
+  }
+
+  // Help
+  if (/^(help|what can you do|what are your commands|what are your features)$/.test(t)) {
+    return {
+      say: "I can tell the time, date and weather, set timers and reminders, open apps and websites, search Google or YouTube, give directions, check the battery, do quick sums, and answer study questions."
+    };
+  }
+
+  // Time
+  if (/\b(?:what(?:'s|s| is) the time|what time is it|current time|tell me the time|the time now)\b/.test(t)) {
+    return {
+      say: "It is " + now.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true }) + ", sir."
+    };
+  }
+
+  // Date
+  if (/\b(?:what(?:'s|s| is) (?:the )?(?:date|day)|today'?s date|what day is it|which day is it)\b/.test(t)) {
+    return {
+      say: "Today is " + now.toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) + "."
+    };
+  }
+
+  // Battery
+  if (/how much battery|battery (?:level|percentage|percent|status)|what(?:'s|s| is) (?:my |the )?battery/.test(t)) {
+    return { say: await batteryAnswer() };
+  }
+
+  // Quick sums
+  const sum = calcAnswer(n);
+  if (sum) return { say: sum };
+
+  // Timers and reminders
+  const tm = timerCommand(t, n);
+  if (tm) return tm;
+
+  // Settings (opens the page, cannot toggle)
+  const st = settingsCommand(t);
+  if (st) return st;
+
+  // Open apps / sites
+  const op = openCommand(t);
+  if (op) return op;
+
+  // Search, YouTube, maps, calls
+  const sr = searchCommand(t);
+  if (sr) return sr;
+
+  // Weather
+  const w = await weatherAnswer(t);
+  if (w) return { say: w };
+
+  return null; // not a local command: ask the AI
 }
 
 
@@ -762,24 +967,57 @@ function searchCommand(t) {
 // AI BRAIN (GEMINI)
 // ==================================
 
-async function askJarvis(text) {
+async function askJarvis(rawText) {
+  busy = true;
+
+  // Remove a leading "Jarvis" from the command
+  const text = rawText.replace(/^\s*(?:hey\s+)?jarvis\b[\s,.:;!?-]*/i, "").trim() || rawText;
+
+  // 1. Local commands first (instant, no AI request used)
+  let cmd = null;
+  try {
+    cmd = await handleCommand(text);
+  } catch (e) {
+    cmd = null;
+  }
+
+  if (cmd) {
+    if (cmd.silent) return;
+    showResponse(cmd.say, cmd.link);
+    speak(cmd.say);
+    return;
+  }
+
+  // 2. Otherwise ask the AI
   if (!getKey()) {
     responseBox.textContent = "API key needed. Tap the orb and try again.";
     finishTurn();
     return;
   }
 
-  busy = true;
   setMode("thinking");
   responseBox.textContent = "JARVIS is thinking...";
   state.textContent = "PROCESSING...";
 
-  history.push({ role: "user", parts: [{ text }] });
+  history.push({ role: "user", parts: [{ text: text }] });
   saveHistory();
+
+  const nowText = new Date().toLocaleString("en-IN", {
+    weekday: "long", day: "numeric", month: "long", year: "numeric",
+    hour: "numeric", minute: "2-digit", hour12: true
+  });
 
   const body = JSON.stringify({
     systemInstruction: {
-      parts: [{ text: "You are JARVIS, a witty, polite AI assistant and study helper. Answers are spoken aloud, so use plain spoken language with no markdown, bullet symbols or special characters. For casual questions, answer in 1-3 sentences. If the user asks to explain, teach, solve, or go into detail, give a clear step-by-step answer of up to about 150 words, using simple words and one example. Use the earlier conversation for context. The current date and time is " + new Date().toLocaleString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) + "." }]
+      parts: [{
+        text:
+          "You are JARVIS, a witty, polite AI assistant and study helper. " +
+          "Answers are spoken aloud, so use plain spoken language with no markdown, bullet symbols or special characters. " +
+          "For casual questions, answer in 1-3 sentences. " +
+          "If the user asks to explain, teach, solve, or go into detail, give a clear step-by-step answer of up to about 150 words, using simple words and one example. " +
+          "Use the earlier conversation for context. " +
+          "The current date and time is " + nowText + "."
+      }]
     },
     contents: history
   });
