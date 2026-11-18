@@ -779,7 +779,7 @@ async function askJarvis(text) {
 
   const body = JSON.stringify({
     systemInstruction: {
-      parts: [{ text: "You are JARVIS, a witty, polite AI assistant. Keep answers short (1-3 sentences) because they will be spoken aloud. No markdown. Use the earlier conversation for context." }]
+      parts: [{ text: "You are JARVIS, a witty, polite AI assistant and study helper. Answers are spoken aloud, so use plain spoken language with no markdown, bullet symbols or special characters. For casual questions, answer in 1-3 sentences. If the user asks to explain, teach, solve, or go into detail, give a clear step-by-step answer of up to about 150 words, using simple words and one example. Use the earlier conversation for context. The current date and time is " + new Date().toLocaleString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) + "." }]
     },
     contents: history
   });
