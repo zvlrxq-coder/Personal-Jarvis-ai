@@ -26,6 +26,7 @@ setInterval(updateClock, 1000);
 // ==================================
 
 const voiceBtn = document.getElementById("voiceBtn");
+const voiceSelect = document.getElementById("voiceSelect");
 const state = document.getElementById("state");
 const voiceStatus = document.getElementById("voiceStatus");
 const transcriptBox = document.getElementById("transcript");
@@ -80,7 +81,6 @@ function saveHistory() {
   if (history.length > MAX_HISTORY) {
     history = history.slice(history.length - MAX_HISTORY);
   }
-  // History must start with a user message
   while (history.length && history[0].role !== "user") history.shift();
   try {
     localStorage.setItem("jarvis_history", JSON.stringify(history));
@@ -98,7 +98,6 @@ saveHistory();
 let MODELS = ["gemini-3.8-flash"];
 let modelsLoaded = false;
 
-// Models that hit their daily limit are skipped for 3 hours
 const COOLDOWN_MS = 3 * 60 * 60 * 1000;
 
 function getExhausted() {
@@ -197,7 +196,6 @@ async function tryModels(body) {
       }
 
       if (res.status === 429) {
-        // Daily limit hit on this model: remember and move on
         markExhausted(model);
         quotaHits++;
         lastErr = "Quota reached on " + model;
@@ -211,7 +209,6 @@ async function tryModels(body) {
         continue;
       }
 
-      // Any other error (bad key etc): stop and show it
       throw new Error(data.error?.message || ("Error " + res.status));
 
     } catch (err) {
@@ -229,23 +226,87 @@ async function tryModels(body) {
 
 
 // ==================================
-// SPEAK (with Android unlock + voice pick)
+// VOICES + VOICE PICKER
 // ==================================
 
 let voices = [];
+let chosenVoiceName = localStorage.getItem("jarvis_voice") || "";
 
-function loadVoices() {
-  if ("speechSynthesis" in window) {
-    voices = speechSynthesis.getVoices() || [];
+function buildVoiceList() {
+  if (!("speechSynthesis" in window)) {
+    voiceSelect.innerHTML = "<option>Voice not supported</option>";
+    return;
   }
+
+  voices = speechSynthesis.getVoices() || [];
+
+  if (!voices.length) {
+    voiceSelect.innerHTML = "<option>No voices found yet...</option>";
+    return;
+  }
+
+  // English voices first; if none, show everything
+  let list = voices.filter(v => v.lang && v.lang.toLowerCase().startsWith("en"));
+  if (!list.length) list = voices.slice();
+
+  voiceSelect.innerHTML = "";
+
+  const auto = document.createElement("option");
+  auto.value = "";
+  auto.textContent = "AUTO (best English voice)";
+  voiceSelect.appendChild(auto);
+
+  list.forEach(v => {
+    const o = document.createElement("option");
+    o.value = v.name;
+    o.textContent = v.name + " (" + v.lang + ")";
+    voiceSelect.appendChild(o);
+  });
+
+  // Restore saved choice if it still exists
+  const exists = list.some(v => v.name === chosenVoiceName);
+  voiceSelect.value = exists ? chosenVoiceName : "";
+  if (!exists) chosenVoiceName = "";
 }
 
 if ("speechSynthesis" in window) {
-  loadVoices();
-  speechSynthesis.onvoiceschanged = loadVoices;
+  buildVoiceList();
+  speechSynthesis.onvoiceschanged = buildVoiceList;
+  // Android sometimes loads voices late
+  setTimeout(buildVoiceList, 800);
+  setTimeout(buildVoiceList, 2500);
 }
 
-// Call this from a tap so Chrome allows speech later
+voiceSelect.onchange = function () {
+  chosenVoiceName = voiceSelect.value;
+  try {
+    localStorage.setItem("jarvis_voice", chosenVoiceName);
+  } catch (e) {}
+  speak("Good day, sir. This is how I sound.");
+};
+
+function pickVoice() {
+  if (!voices.length) voices = speechSynthesis.getVoices() || [];
+
+  if (chosenVoiceName) {
+    const chosen = voices.find(v => v.name === chosenVoiceName);
+    if (chosen) return chosen;
+  }
+
+  return (
+    voices.find(v => v.lang === "en-IN") ||
+    voices.find(v => v.lang === "en-GB") ||
+    voices.find(v => v.lang === "en-US") ||
+    voices.find(v => v.lang && v.lang.startsWith("en")) ||
+    null
+  );
+}
+
+
+// ==================================
+// SPEAK (with Android unlock)
+// ==================================
+
 function unlockSpeech() {
   if (!("speechSynthesis" in window)) return;
   try {
@@ -254,17 +315,6 @@ function unlockSpeech() {
     u.volume = 0;
     speechSynthesis.speak(u);
   } catch (e) {}
-}
-
-function pickVoice() {
-  if (!voices.length) loadVoices();
-  return (
-    voices.find(v => v.lang === "en-IN") ||
-    voices.find(v => v.lang === "en-GB") ||
-    voices.find(v => v.lang === "en-US") ||
-    voices.find(v => v.lang && v.lang.startsWith("en")) ||
-    null
-  );
 }
 
 function speak(text) {
@@ -301,7 +351,6 @@ function speak(text) {
     state.textContent = "VOICE ERROR: " + (e.error || "unknown");
   };
 
-  // Small delay helps Android Chrome after cancel()
   setTimeout(function () {
     speechSynthesis.speak(u);
   }, 100);
@@ -345,7 +394,6 @@ async function askJarvis(text) {
     speak(result.reply);
 
   } catch (err) {
-    // Remove the unanswered question so history stays valid
     history.pop();
     saveHistory();
 
@@ -435,7 +483,7 @@ if (SpeechRecognition) {
   };
 
   voiceBtn.onclick = function () {
-    unlockSpeech(); // runs inside the tap, so Chrome allows speech later
+    unlockSpeech();
 
     if (listening) {
       recognition.stop();
