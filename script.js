@@ -26,7 +26,7 @@ setInterval(updateClock, 1000);
 // ==================================
 
 let API_KEY = localStorage.getItem("gemini_key");
-const MODEL = "gemini-2.5-flash";
+const MODEL = "gemini-3.8-flash";
 
 function getKey() {
   if (!API_KEY || API_KEY === "null") {
