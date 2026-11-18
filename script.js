@@ -22,10 +22,11 @@ setInterval(updateClock, 1000);
 
 
 // ==================================
-// ELEMENTS + ORB MODE
+// ELEMENTS + MODES
 // ==================================
 
 const voiceBtn = document.getElementById("voiceBtn");
+const handsBtn = document.getElementById("handsBtn");
 const voiceSelect = document.getElementById("voiceSelect");
 const state = document.getElementById("state");
 const voiceStatus = document.getElementById("voiceStatus");
@@ -34,13 +35,58 @@ const responseBox = document.getElementById("response");
 const clearBtn = document.getElementById("clearBtn");
 const orb = document.getElementById("orb");
 
+let handsFree = false;
+let busy = false;           // true while thinking or speaking
+let awaitingCommand = false; // heard "Jarvis" alone, waiting for the command
+let restartTimer = null;
+
 function setMode(mode) {
-  document.body.dataset.mode = mode; // idle | listening | thinking | speaking
+  document.body.dataset.mode = mode; // idle | wake | listening | thinking | speaking
+}
+
+function idle() {
+  setMode(handsFree ? "wake" : "idle");
+  state.textContent = handsFree ? "SAY 'JARVIS' TO WAKE ME" : "AWAITING YOUR COMMAND";
+}
+
+function finishTurn() {
+  busy = false;
+  idle();
+  if (handsFree) scheduleWake(500);
 }
 
 orb.onclick = function () {
   voiceBtn.click();
 };
+
+
+// ==================================
+// CHIME (wake sound)
+// ==================================
+
+let audioCtx = null;
+
+function initAudio() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  } catch (e) {}
+}
+
+function chime() {
+  try {
+    initAudio();
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = "sine";
+    o.frequency.value = 880;
+    g.gain.value = 0.15;
+    o.connect(g);
+    g.connect(audioCtx.destination);
+    o.start();
+    o.stop(audioCtx.currentTime + 0.15);
+  } catch (e) {}
+}
 
 
 // ==================================
@@ -245,7 +291,6 @@ function buildVoiceList() {
     return;
   }
 
-  // English voices first; if none, show everything
   let list = voices.filter(v => v.lang && v.lang.toLowerCase().startsWith("en"));
   if (!list.length) list = voices.slice();
 
@@ -263,7 +308,6 @@ function buildVoiceList() {
     voiceSelect.appendChild(o);
   });
 
-  // Restore saved choice if it still exists
   const exists = list.some(v => v.name === chosenVoiceName);
   voiceSelect.value = exists ? chosenVoiceName : "";
   if (!exists) chosenVoiceName = "";
@@ -272,7 +316,6 @@ function buildVoiceList() {
 if ("speechSynthesis" in window) {
   buildVoiceList();
   speechSynthesis.onvoiceschanged = buildVoiceList;
-  // Android sometimes loads voices late
   setTimeout(buildVoiceList, 800);
   setTimeout(buildVoiceList, 2500);
 }
@@ -303,7 +346,8 @@ function pickVoice() {
 }
 
 
-// SPEAK (with Android unlock)
+// ==================================
+// SPEAK
 // ==================================
 
 let currentUtterance = null; // keeps Chrome from dropping the utterance mid-speech
@@ -322,9 +366,14 @@ function unlockSpeech() {
 function speak(text, useDefault) {
   if (!("speechSynthesis" in window)) {
     state.textContent = "VOICE OUTPUT NOT SUPPORTED";
-    setMode("idle");
+    finishTurn();
     return;
   }
+
+  // Stop the mic while Jarvis talks so it doesn't hear itself
+  busy = true;
+  clearTimeout(restartTimer);
+  try { if (recognition) recognition.abort(); } catch (e) {}
 
   const clean = text.replace(/[*_#`]/g, "");
 
@@ -335,7 +384,7 @@ function speak(text, useDefault) {
   currentUtterance = u;
 
   if (useDefault) {
-    u.lang = "en-US"; // fallback: let the tablet use its own default voice
+    u.lang = "en-US";
   } else {
     const v = pickVoice();
     if (v) {
@@ -354,21 +403,18 @@ function speak(text, useDefault) {
   };
 
   u.onend = function () {
-    setMode("idle");
-    state.textContent = "AWAITING YOUR COMMAND";
+    finishTurn();
   };
 
   u.onerror = function (e) {
-    // cancel() fires an error for the old utterance; ignore it
     if (e.error === "canceled" || e.error === "interrupted") return;
 
-    // The chosen voice failed: retry once with the default voice
     if (!useDefault) {
       speak(text, true);
       return;
     }
 
-    setMode("idle");
+    finishTurn();
     state.textContent = "VOICE ERROR: " + (e.error || "unknown");
   };
 
@@ -386,10 +432,11 @@ function speak(text, useDefault) {
 async function askJarvis(text) {
   if (!getKey()) {
     responseBox.textContent = "API key needed. Tap the orb and try again.";
-    setMode("idle");
+    finishTurn();
     return;
   }
 
+  busy = true;
   setMode("thinking");
   responseBox.textContent = "JARVIS is thinking...";
   state.textContent = "PROCESSING...";
@@ -426,22 +473,47 @@ async function askJarvis(text) {
       responseBox.textContent = "AI error: " + err.message;
     }
 
-    state.textContent = "AWAITING YOUR COMMAND";
-    setMode("idle");
+    finishTurn();
   }
 }
 
 
 // ==================================
-// VOICE RECOGNITION
+// VOICE RECOGNITION (manual + hands-free)
 // ==================================
 
 const SpeechRecognition =
   window.SpeechRecognition || window.webkitSpeechRecognition;
 
+const WAKE = /\b(jarvis|jarvish|jarvas|jarviz|jervis|garvis)\b/i;
+
 let recognition;
-let listening = false;
+let running = false;        // is the recognizer currently on?
+let manualSession = false;  // started by tapping the mic button
+let switching = false;      // switching from wake listening to manual
 let finalText = "";
+let errorStreak = 0;
+
+function scheduleWake(ms) {
+  clearTimeout(restartTimer);
+  restartTimer = setTimeout(startWake, ms || 400);
+}
+
+function startWake() {
+  if (!handsFree || busy || running || manualSession || switching) return;
+  try {
+    recognition.start();
+  } catch (e) {
+    scheduleWake(800);
+  }
+}
+
+function updateHandsUI() {
+  handsBtn.textContent = "HANDS-FREE: " + (handsFree ? "ON" : "OFF");
+  handsBtn.classList.toggle("on", handsFree);
+  voiceStatus.textContent = handsFree ? "WAKE WORD" : "STANDBY";
+  if (!busy) idle();
+}
 
 if (SpeechRecognition) {
 
@@ -451,18 +523,23 @@ if (SpeechRecognition) {
   recognition.interimResults = true;
 
   recognition.onstart = function () {
-    listening = true;
-    speechSynthesis.cancel();
-    setMode("listening");
+    running = true;
 
-    state.textContent = "LISTENING TO YOUR COMMAND...";
-    voiceStatus.textContent = "LISTENING";
-    voiceBtn.textContent = "STOP LISTENING";
-    voiceBtn.classList.add("listening-active");
-    responseBox.textContent = "JARVIS is listening.";
+    if (manualSession) {
+      speechSynthesis.cancel();
+      setMode("listening");
+      state.textContent = "LISTENING TO YOUR COMMAND...";
+      voiceStatus.textContent = "LISTENING";
+      voiceBtn.textContent = "STOP LISTENING";
+      voiceBtn.classList.add("listening-active");
+      responseBox.textContent = "JARVIS is listening.";
+    } else {
+      finalText = "";
+    }
   };
 
   recognition.onresult = function (event) {
+    errorStreak = 0;
     let interimText = "";
 
     for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -474,56 +551,172 @@ if (SpeechRecognition) {
       }
     }
 
-    transcriptBox.textContent = (finalText + interimText).trim();
+    const shown = (finalText + interimText).trim();
+
+    // In hands-free, only show speech that involves Jarvis
+    if (manualSession || awaitingCommand || WAKE.test(shown)) {
+      transcriptBox.textContent = shown;
+    }
   };
 
   recognition.onerror = function (event) {
+    if (event.error === "aborted") return;
+
+    if (event.error === "no-speech") {
+      if (manualSession) responseBox.textContent = "No speech detected. Try again.";
+      return;
+    }
+
+    if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+      handsFree = false;
+      updateHandsUI();
+      responseBox.textContent = "Microphone permission denied.";
+      return;
+    }
+
     const errors = {
-      "not-allowed": "Microphone permission denied.",
-      "no-speech": "No speech detected. Try again.",
       "network": "Speech recognition network error.",
       "audio-capture": "Microphone unavailable."
     };
 
     responseBox.textContent =
       errors[event.error] || "Voice recognition error: " + event.error;
-  };
 
-  recognition.onend = function () {
-    listening = false;
-
-    voiceStatus.textContent = "STANDBY";
-    voiceBtn.textContent = "ACTIVATE MICROPHONE";
-    voiceBtn.classList.remove("listening-active");
-    state.textContent = "AWAITING YOUR COMMAND";
-
-    if (finalText.trim()) {
-      askJarvis(finalText.trim());
-    } else {
-      setMode("idle");
+    errorStreak++;
+    if (handsFree && errorStreak > 6) {
+      handsFree = false;
+      updateHandsUI();
+      responseBox.textContent = "Hands-free turned off after repeated errors.";
     }
   };
 
+  recognition.onend = function () {
+    running = false;
+
+    if (switching) return; // the mic button is taking over
+
+    // ---------- manual (button) session ----------
+    if (manualSession) {
+      manualSession = false;
+      voiceBtn.textContent = "ACTIVATE MICROPHONE";
+      voiceBtn.classList.remove("listening-active");
+      voiceStatus.textContent = handsFree ? "WAKE WORD" : "STANDBY";
+
+      const t = finalText.trim();
+      if (t) {
+        askJarvis(t);
+      } else {
+        idle();
+        if (handsFree) scheduleWake(400);
+      }
+      return;
+    }
+
+    // ---------- hands-free session ----------
+    if (!handsFree || busy) return;
+
+    const t = finalText.trim();
+    finalText = "";
+
+    if (!t) {
+      if (awaitingCommand) {
+        awaitingCommand = false;
+        idle();
+      }
+      scheduleWake(300);
+      return;
+    }
+
+    if (awaitingCommand) {
+      awaitingCommand = false;
+      transcriptBox.textContent = t;
+      askJarvis(t);
+      return;
+    }
+
+    const m = t.match(WAKE);
+    if (!m) {
+      scheduleWake(300);
+      return;
+    }
+
+    const cmd = t
+      .slice(m.index + m[0].length)
+      .replace(/^[\s,.:;!?-]+/, "")
+      .trim();
+
+    transcriptBox.textContent = t;
+
+    if (cmd.length > 1) {
+      askJarvis(cmd);
+    } else {
+      chime();
+      awaitingCommand = true;
+      setMode("listening");
+      state.textContent = "YES, SIR?";
+      scheduleWake(150);
+    }
+  };
+
+  // ----- Mic button: one-shot command -----
   voiceBtn.onclick = function () {
     unlockSpeech();
+    initAudio();
 
-    if (listening) {
+    if (manualSession && running) {
       recognition.stop();
       return;
     }
 
-    finalText = "";
-    transcriptBox.textContent = "Listening for your words...";
+    clearTimeout(restartTimer);
+    awaitingCommand = false;
 
-    try {
-      recognition.start();
-    } catch (error) {
-      responseBox.textContent = "Please wait a moment and try again.";
+    const begin = function () {
+      switching = false;
+      manualSession = true;
+      finalText = "";
+      transcriptBox.textContent = "Listening for your words...";
+      try {
+        recognition.start();
+      } catch (error) {
+        manualSession = false;
+        responseBox.textContent = "Please wait a moment and try again.";
+        if (handsFree) scheduleWake(800);
+      }
+    };
+
+    if (running) {
+      switching = true;
+      try { recognition.abort(); } catch (e) {}
+      setTimeout(begin, 350);
+    } else {
+      begin();
+    }
+  };
+
+  // ----- Hands-free toggle -----
+  handsBtn.onclick = function () {
+    unlockSpeech();
+    initAudio();
+
+    handsFree = !handsFree;
+    awaitingCommand = false;
+    errorStreak = 0;
+    updateHandsUI();
+
+    if (handsFree) {
+      scheduleWake(200);
+    } else {
+      clearTimeout(restartTimer);
+      if (!manualSession) {
+        try { recognition.abort(); } catch (e) {}
+      }
     }
   };
 
 } else {
   voiceBtn.disabled = true;
+  handsBtn.disabled = true;
   state.textContent = "VOICE RECOGNITION NOT SUPPORTED";
   voiceStatus.textContent = "UNAVAILABLE";
   responseBox.textContent =
@@ -541,7 +734,9 @@ clearBtn.onclick = function () {
   try { localStorage.removeItem("jarvis_history"); } catch (e) {}
   saveHistory();
   speechSynthesis.cancel();
-  setMode("idle");
+  busy = false;
+  idle();
   transcriptBox.textContent = "Your spoken words will appear here...";
   responseBox.textContent = "Memory cleared. Awaiting input.";
+  if (handsFree) scheduleWake(500);
 };
