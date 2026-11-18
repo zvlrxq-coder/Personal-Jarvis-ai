@@ -43,11 +43,10 @@ orb.onclick = function () {
 
 
 // ==================================
-// AI BRAIN (GEMINI)
+// API KEY
 // ==================================
 
 let API_KEY = localStorage.getItem("gemini_key");
-const MODEL = "gemini-3.8-flash";
 
 function getKey() {
   if (!API_KEY || API_KEY === "null") {
@@ -61,6 +60,49 @@ function getKey() {
   }
   return API_KEY;
 }
+
+
+// ==================================
+// MODEL LIST (auto-switch when busy)
+// ==================================
+
+let MODELS = ["gemini-3.8-flash"];
+let modelsLoaded = false;
+
+async function loadModels() {
+  modelsLoaded = true;
+  try {
+    const r = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models?pageSize=100&key=" + API_KEY
+    );
+    const d = await r.json();
+
+    const found = (d.models || [])
+      .filter(m => (m.supportedGenerationMethods || []).includes("generateContent"))
+      .map(m => m.name.replace("models/", ""))
+      .filter(n =>
+        n.includes("flash") &&
+        !n.includes("image") &&
+        !n.includes("tts") &&
+        !n.includes("live") &&
+        !n.includes("audio")
+      );
+
+    if (found.length) {
+      // Keep the preferred model first, then the rest as backups
+      const preferred = found.filter(n => n === "gemini-3.8-flash");
+      const others = found.filter(n => n !== "gemini-3.8-flash");
+      MODELS = preferred.concat(others).slice(0, 6);
+    }
+  } catch (e) {
+    // keep the default list
+  }
+}
+
+
+// ==================================
+// SPEAK
+// ==================================
 
 function speak(text) {
   speechSynthesis.cancel();
@@ -76,6 +118,11 @@ function speak(text) {
   };
   speechSynthesis.speak(u);
 }
+
+
+// ==================================
+// AI BRAIN (GEMINI)
+// ==================================
 
 async function askJarvis(text) {
   if (!getKey()) {
@@ -95,12 +142,15 @@ async function askJarvis(text) {
     contents: [{ role: "user", parts: [{ text }] }]
   });
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${API_KEY}`;
-
   try {
+    if (!modelsLoaded) await loadModels();
+
     let res, data;
 
-    for (let attempt = 1; attempt <= 4; attempt++) {
+    for (const model of MODELS) {
+      const url =
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${API_KEY}`;
+
       res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -108,11 +158,16 @@ async function askJarvis(text) {
       });
       data = await res.json();
 
-      // Retry only when Google is busy (503) or rate limiting (429)
-      if (res.status !== 503 && res.status !== 429) break;
+      if (res.ok) break;
 
-      responseBox.textContent = "Servers busy, retrying (" + attempt + "/4)...";
-      await new Promise(r => setTimeout(r, attempt * 2000));
+      // Busy, rate limited, or model unavailable: try the next model
+      if (res.status === 503 || res.status === 429 || res.status === 404) {
+        responseBox.textContent = "Model busy, trying another...";
+        continue;
+      }
+
+      // Any other error (bad key etc): stop and show it
+      break;
     }
 
     if (!res.ok) {
@@ -122,7 +177,15 @@ async function askJarvis(text) {
       return;
     }
 
-    const reply = data.candidates[0].content.parts[0].text;
+    const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!reply) {
+      responseBox.textContent = "No answer came back. Try asking again.";
+      state.textContent = "AWAITING YOUR COMMAND";
+      setMode("idle");
+      return;
+    }
+
     responseBox.textContent = reply;
     speak(reply);
 
