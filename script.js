@@ -63,7 +63,19 @@ function getKey() {
 
 
 // ==================================
-// MODEL LIST (auto-switch when busy)
+// FETCH WITH TIMEOUT
+// ==================================
+
+function fetchWithTimeout(url, options, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms || 8000);
+  return fetch(url, Object.assign({}, options, { signal: controller.signal }))
+    .finally(() => clearTimeout(timer));
+}
+
+
+// ==================================
+// MODEL LIST (fast models first)
 // ==================================
 
 let MODELS = ["gemini-3.8-flash"];
@@ -72,8 +84,10 @@ let modelsLoaded = false;
 async function loadModels() {
   modelsLoaded = true;
   try {
-    const r = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models?pageSize=100&key=" + API_KEY
+    const r = await fetchWithTimeout(
+      "https://generativelanguage.googleapis.com/v1beta/models?pageSize=100&key=" + API_KEY,
+      {},
+      6000
     );
     const d = await r.json();
 
@@ -89,10 +103,9 @@ async function loadModels() {
       );
 
     if (found.length) {
-      // Keep the preferred model first, then the rest as backups
-      const preferred = found.filter(n => n === "gemini-3.8-flash");
-      const others = found.filter(n => n !== "gemini-3.8-flash");
-      MODELS = preferred.concat(others).slice(0, 6);
+      const lite = found.filter(n => n.includes("lite"));
+      const rest = found.filter(n => !n.includes("lite"));
+      MODELS = lite.concat(rest).slice(0, 6);
     }
   } catch (e) {
     // keep the default list
@@ -145,18 +158,26 @@ async function askJarvis(text) {
   try {
     if (!modelsLoaded) await loadModels();
 
-    let res, data;
+    let res = null;
+    let data = null;
 
     for (const model of MODELS) {
       const url =
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${API_KEY}`;
 
-      res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body
-      });
-      data = await res.json();
+      try {
+        res = await fetchWithTimeout(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body
+        }, 10000);
+        data = await res.json();
+      } catch (e) {
+        // Timed out or network hiccup: try the next model
+        res = null;
+        responseBox.textContent = "Model slow, trying another...";
+        continue;
+      }
 
       if (res.ok) break;
 
@@ -168,6 +189,13 @@ async function askJarvis(text) {
 
       // Any other error (bad key etc): stop and show it
       break;
+    }
+
+    if (!res) {
+      responseBox.textContent = "Connection failed or too slow. Try again.";
+      state.textContent = "AWAITING YOUR COMMAND";
+      setMode("idle");
+      return;
     }
 
     if (!res.ok) {
@@ -190,7 +218,7 @@ async function askJarvis(text) {
     speak(reply);
 
   } catch (err) {
-    responseBox.textContent = "Connection failed. Check your internet.";
+    responseBox.textContent = "Something went wrong. Try again.";
     state.textContent = "AWAITING YOUR COMMAND";
     setMode("idle");
   }
