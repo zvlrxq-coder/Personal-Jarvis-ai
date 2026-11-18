@@ -300,8 +300,11 @@ button:active {
   font-size: 10px;
   border-color: #6b4a30;
   color: #c4a68c;
-  box-shadow: no
-  
+  box-shadow: none;
+}
+
+/* ============ DIAGNOSTICS + FOOTER ============ */
+
 .metric {
   display: flex;
   justify-content: space-between;
@@ -335,3 +338,5 @@ footer {
   .glow { inset: 54px; }
   .core { inset: 66px; }
 }
+
+/* END OF FILE */
