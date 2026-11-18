@@ -165,7 +165,7 @@ clearBtn.onclick = function() {
 // JARVIS - AI BRAIN (GEMINI)
 // ==================================
 
-const API_KEY = "YOUR_KEY_HERE";
+const API_KEY = AQ.Ab8RN6K1aPznyw21CysR6XJCnXSjLNg5Zs3PjmS3_QwoyC4opg;
 const MODEL = "gemini-2.5-flash";
 
 async function askJarvis(text) {
