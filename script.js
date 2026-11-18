@@ -1,5 +1,5 @@
 // ==================================
-// JARVIS 2.0 - CLOCK
+// CLOCK
 // ==================================
 
 function updateClock() {
@@ -22,7 +22,28 @@ setInterval(updateClock, 1000);
 
 
 // ==================================
-// JARVIS - AI BRAIN (GEMINI)
+// ELEMENTS + ORB MODE
+// ==================================
+
+const voiceBtn = document.getElementById("voiceBtn");
+const state = document.getElementById("state");
+const voiceStatus = document.getElementById("voiceStatus");
+const transcriptBox = document.getElementById("transcript");
+const responseBox = document.getElementById("response");
+const clearBtn = document.getElementById("clearBtn");
+const orb = document.getElementById("orb");
+
+function setMode(mode) {
+  document.body.dataset.mode = mode; // idle | listening | thinking | speaking
+}
+
+orb.onclick = function () {
+  voiceBtn.click();
+};
+
+
+// ==================================
+// AI BRAIN (GEMINI)
 // ==================================
 
 let API_KEY = localStorage.getItem("gemini_key");
@@ -45,15 +66,25 @@ function speak(text) {
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
   u.lang = "en-IN";
+  u.onstart = function () {
+    setMode("speaking");
+    state.textContent = "JARVIS IS SPEAKING...";
+  };
+  u.onend = u.onerror = function () {
+    setMode("idle");
+    state.textContent = "AWAITING YOUR COMMAND";
+  };
   speechSynthesis.speak(u);
 }
 
 async function askJarvis(text) {
   if (!getKey()) {
-    responseBox.textContent = "API key needed. Tap the mic and try again.";
+    responseBox.textContent = "API key needed. Tap the orb and try again.";
+    setMode("idle");
     return;
   }
 
+  setMode("thinking");
   responseBox.textContent = "JARVIS is thinking...";
   state.textContent = "PROCESSING...";
 
@@ -77,6 +108,7 @@ async function askJarvis(text) {
     if (!res.ok) {
       responseBox.textContent = "AI error: " + (data.error?.message || res.status);
       state.textContent = "AWAITING YOUR COMMAND";
+      setMode("idle");
       return;
     }
 
@@ -86,22 +118,15 @@ async function askJarvis(text) {
 
   } catch (err) {
     responseBox.textContent = "Connection failed. Check your internet.";
+    state.textContent = "AWAITING YOUR COMMAND";
+    setMode("idle");
   }
-
-  state.textContent = "AWAITING YOUR COMMAND";
 }
 
 
 // ==================================
-// JARVIS - VOICE RECOGNITION
+// VOICE RECOGNITION
 // ==================================
-
-const voiceBtn = document.getElementById("voiceBtn");
-const state = document.getElementById("state");
-const voiceStatus = document.getElementById("voiceStatus");
-const transcriptBox = document.getElementById("transcript");
-const responseBox = document.getElementById("response");
-const clearBtn = document.getElementById("clearBtn");
 
 const SpeechRecognition =
   window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -113,30 +138,27 @@ let finalText = "";
 if (SpeechRecognition) {
 
   recognition = new SpeechRecognition();
-
   recognition.lang = "en-IN";
   recognition.continuous = false;
   recognition.interimResults = true;
 
   recognition.onstart = function () {
     listening = true;
+    speechSynthesis.cancel();
+    setMode("listening");
 
     state.textContent = "LISTENING TO YOUR COMMAND...";
     voiceStatus.textContent = "LISTENING";
     voiceBtn.textContent = "STOP LISTENING";
     voiceBtn.classList.add("listening-active");
-
     responseBox.textContent = "JARVIS is listening.";
   };
 
   recognition.onresult = function (event) {
-
     let interimText = "";
 
     for (let i = event.resultIndex; i < event.results.length; i++) {
-
       const text = event.results[i][0].transcript;
-
       if (event.results[i].isFinal) {
         finalText += text + " ";
       } else {
@@ -148,7 +170,6 @@ if (SpeechRecognition) {
   };
 
   recognition.onerror = function (event) {
-
     const errors = {
       "not-allowed": "Microphone permission denied.",
       "no-speech": "No speech detected. Try again.",
@@ -161,29 +182,27 @@ if (SpeechRecognition) {
   };
 
   recognition.onend = function () {
-
     listening = false;
 
     voiceStatus.textContent = "STANDBY";
     voiceBtn.textContent = "ACTIVATE MICROPHONE";
     voiceBtn.classList.remove("listening-active");
-
     state.textContent = "AWAITING YOUR COMMAND";
 
     if (finalText.trim()) {
       askJarvis(finalText.trim());
+    } else {
+      setMode("idle");
     }
   };
 
   voiceBtn.onclick = function () {
-
     if (listening) {
       recognition.stop();
       return;
     }
 
     finalText = "";
-
     transcriptBox.textContent = "Listening for your words...";
 
     try {
@@ -194,27 +213,22 @@ if (SpeechRecognition) {
   };
 
 } else {
-
   voiceBtn.disabled = true;
-
   state.textContent = "VOICE RECOGNITION NOT SUPPORTED";
-
   voiceStatus.textContent = "UNAVAILABLE";
-
   responseBox.textContent =
     "Your browser does not support Web Speech Recognition. Try an updated Chrome browser.";
 }
 
 
 // ==================================
-// CLEAR COMMAND CONSOLE
+// CLEAR CONSOLE
 // ==================================
 
 clearBtn.onclick = function () {
-
   finalText = "";
-
+  speechSynthesis.cancel();
+  setMode("idle");
   transcriptBox.textContent = "Your spoken words will appear here...";
-
   responseBox.textContent = "Voice recognition ready. Awaiting input.";
 };
