@@ -354,4 +354,27 @@ footer {
   font-size: 12px;
   letter-spacing: 1px;
 }
+
+/* ============ HANDS-FREE ============ */
+
+.hands-btn {
+  display: block;
+  margin: 12px auto 0;
+  min-width: 220px;
+  border-color: #6b4a30;
+  color: #c4a68c;
+  box-shadow: none;
+}
+
+.hands-btn.on {
+  background: #4a2508;
+  border-color: var(--accent-2);
+  color: var(--accent-2);
+  box-shadow: 0 0 25px rgba(var(--accent-rgb), 0.4);
+}
+
+body[data-mode="wake"] .glow { animation-duration: 2.4s; }
+body[data-mode="wake"] .core { animation-duration: 2.4s; filter: brightness(0.85); }
+body[data-mode="wake"] .ring1 { animation-duration: 6s; }
+
 /* END OF FILE */
